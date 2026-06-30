@@ -29,6 +29,32 @@
   // Cache para tooltips
   let bookCache = new Map(); // bookId -> { status, editions, workId }
 
+  // Fila de fetches para tooltips com controle de concorrência
+  const fetchQueue = {
+    MAX_CONCURRENT: 3,
+    active: 0,
+    pending: [],
+    queued: new Set(), // bookIds já na fila para evitar duplicatas
+    enqueue(bookId, container, activeSpan) {
+      if (this.queued.has(bookId)) return;
+      this.queued.add(bookId);
+      this.pending.push({ bookId, container, activeSpan });
+      this._drain();
+    },
+    async _drain() {
+      while (this.active < this.MAX_CONCURRENT && this.pending.length > 0) {
+        const job = this.pending.shift();
+        this.active++;
+        fetchEditionsForTooltip(job.bookId, job.container, job.activeSpan)
+          .finally(() => {
+            this.active--;
+            this.queued.delete(job.bookId);
+            this._drain();
+          });
+      }
+    }
+  };
+
   function loadPersistedBooks() {
     try {
       const data = localStorage.getItem(STORAGE_KEY);
@@ -578,7 +604,7 @@
       const bookId = match[1];
 
       if (!bookCache.has(bookId)) {
-        fetchEditionsForTooltip(bookId, container, activeSpan);
+        fetchQueue.enqueue(bookId, container, activeSpan);
       } else {
         updateActiveTooltip(bookId, container, activeSpan);
       }
